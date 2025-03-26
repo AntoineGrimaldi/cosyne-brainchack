@@ -15,9 +15,10 @@ class sm_generative_model:
         self.SMs = torch.zeros(self.opt.N_SMs, self.opt.N_pre, self.opt.N_delays, device = device)
         # average probability of having a spike for a specific timestep (homogeneous Poisson)
         self.opt.frs = self.opt.frs.to(device)
-        proba_timestep = self.opt.frs*1e-3
+        proba_timestep = self.opt.avg_fr_mot*1e-3
         # compute the average number of spike per motif for each neuron
         N_spikes_per_motif = proba_timestep*self.opt.N_delays
+
         self.spike_times = []
         for k in range(self.opt.N_SMs):
             # get the indices of neurons participating in the motif
@@ -102,7 +103,9 @@ class sm_generative_model:
                 loc_grid[trial,poss_loc_time[ind_loc]] = 0
 
         # random distribution when no modification was added
-        input_proba[input_proba==-1] = 1/self.opt.N_delays
+        cv_proba = (1-self.opt.coefficient_variation.clone().unsqueeze(0).unsqueeze(-1).repeat(nb_trials,1,self.opt.N_timesteps))/self.opt.N_delays
+        input_proba = torch.where((input_proba==-1),input_proba,cv_proba)
+        print(input_proba.min(), input_proba.max())
         # normalizing to required firing rates
         input_proba = input_proba.div_(torch.norm(input_proba, p=1, dim=-1, keepdim=True))*(self.opt.frs.unsqueeze(0).unsqueeze(-1).repeat(nb_trials,1,self.opt.N_timesteps)*1e-3*self.opt.N_timesteps)
         # harsh threshold to have a single spike in one timebin
