@@ -92,7 +92,8 @@ def plot_raster(raster, title = 'raster plot'):
 
     return fig, ax
 
-def plot_colored_raster(input_rp, output_rp, N_delays, warping_coef, indice_trial = 0, title = 'raster plot'):
+def plot_colored_raster(input_rp, output_rp, dataset_parameters, indice_trial = 0, title = 'raster plot'):
+    N_delays, warping_coef = dataset_parameters.N_delays, dataset_parameters.warping_coef
     cmap_2 = matplotlib.colormaps['Set3']
     fig, ax = plot_raster(input_rp[indice_trial], title = title)
     indices = np.where(output_rp[indice_trial]==1)

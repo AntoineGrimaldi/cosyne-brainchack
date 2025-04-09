@@ -50,6 +50,7 @@ class sm_generative_model:
         
         kernels = (1-self.opt.additive_noise)*self.SMs+self.opt.additive_noise*torch.ones_like(self.SMs)/self.opt.N_delays
         kernels = torch.nn.functional.interpolate(kernels, scale_factor=(self.opt.warping_coef))
+        if kernels.shape[-1]% 2 == 0: kernels = kernels[:,:,:-1]
         
         # initialize input and output tensors
         input_proba = -1*torch.ones(nb_trials, self.opt.N_pre, self.opt.N_timesteps, device=self.device)
