@@ -92,12 +92,12 @@ def plot_raster(raster, title = 'raster plot'):
 
     return fig, ax
 
-def plot_colored_raster(input_rp, output_rp, N_delays, indice_trial = 0, title = 'raster plot'):
+def plot_colored_raster(input_rp, output_rp, N_delays, warping_coef, indice_trial = 0, title = 'raster plot'):
     cmap_2 = matplotlib.colormaps['Set3']
     fig, ax = plot_raster(input_rp[indice_trial], title = title)
     indices = np.where(output_rp[indice_trial]==1)
     for k in range(len(indices[0])):
-        ax.axvspan(indices[1][k]-N_delays//2, indices[1][k]+N_delays//2+1, facecolor=cmap_2(indices[0][k]), alpha=0.5)
+        ax.axvspan(indices[1][k]-(N_delays*warping_coef)//2, indices[1][k]+(N_delays*warping_coef)//2+1, facecolor=cmap_2(indices[0][k]), alpha=0.5)
     return fig, ax
 
 def plot_results(world, loss, trained_layer_of_neurons, input_raster_plot, true_occurence, moving_window = 50, order_sms = False, plot = True, verbose = True, device = 'cpu'):

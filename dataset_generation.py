@@ -15,7 +15,10 @@ class sm_generative_model:
         self.SMs = torch.zeros(self.opt.N_SMs, self.opt.N_pre, self.opt.N_delays, device = device)
         # average probability of having a spike for a specific timestep (homogeneous Poisson)
         self.opt.frs = self.opt.frs.to(device)
-        proba_timestep = self.opt.avg_fr_mot*1e-3
+        p_m = min((self.opt.freq_sms*self.opt.N_delays*1e-3).sum().item(),1)*torch.ones_like(self.opt.frs)
+        self.avg_fr_nonmot = self.opt.frs/(self.opt.coefficient_variation*p_m+torch.ones_like(self.opt.frs)-p_m)
+        self.avg_fr_mot = self.avg_fr_nonmot*self.opt.coefficient_variation
+        proba_timestep = self.avg_fr_mot*1e-3
         # compute the average number of spike per motif for each neuron
         N_spikes_per_motif = proba_timestep*self.opt.N_delays
 
@@ -46,6 +49,7 @@ class sm_generative_model:
     def draw_input(self, nb_trials=10):
         
         kernels = (1-self.opt.additive_noise)*self.SMs+self.opt.additive_noise*torch.ones_like(self.SMs)/self.opt.N_delays
+        kernels = torch.nn.functional.interpolate(kernels, scale_factor=(self.opt.warping_coef))
         
         # initialize input and output tensors
         input_proba = -1*torch.ones(nb_trials, self.opt.N_pre, self.opt.N_timesteps, device=self.device)
@@ -58,15 +62,15 @@ class sm_generative_model:
                 nb_motif_k = int(nb_motifs[k])
                 for n in range(nb_motif_k):
                     trial = torch.randint(nb_trials, [1])
-                    time = torch.randint(self.opt.N_delays//2, self.opt.N_timesteps-(self.opt.N_delays//2+1), [1])                    
-                    previous = input_proba[trial,:,time-(self.opt.N_delays//2):time+self.opt.N_delays//2+1].squeeze(0)
+                    time = torch.randint(kernels.shape[-1]//2, self.opt.N_timesteps-(kernels.shape[-1]//2+1), [1])                    
+                    previous = input_proba[trial,:,time-(kernels.shape[-1]):time+kernels.shape[-1]//2+1].squeeze(0)
                     new = torch.zeros_like(previous, device=self.device)
                     # get dropped indices
                     if self.opt.dropout_proba:
                         not_to_keep = torch.where(torch.bernoulli(torch.ones_like(self.ind_inv)*self.opt.dropout_proba)==1)[0]
                         not_kept_ind = self.ind_inv[not_to_keep]
                         motif = kernels[k]
-                        motif[not_kept_ind] = 1/self.opt.N_delays
+                        motif[not_kept_ind] = 1/kernels.shape[-1]
                     else:
                         motif = kernels[k]
                     # if no prior distribution on the location of the motif replace by motif distribution
@@ -75,12 +79,12 @@ class sm_generative_model:
                     #    Bernoulli(p) + Bernoulli(q) = Bernoulli(p+q-p*q)
                     new[previous!=-1]=motif[previous!=-1]+previous[previous!=-1]-previous[previous!=-1]*motif[previous!=-1]
 
-                    input_proba[trial,:,time-(self.opt.N_delays//2):time+self.opt.N_delays//2+1] = new
+                    input_proba[trial,:,time-(kernels.shape[-1]//2):time+kernels.shape[-1]//2+1] = new
                     output_rp[trial,k,time] = 1
 
         else:
         # generate list of (trial,timelocation) to draw the motifs
-            loc_grid = torch.ones(nb_trials,self.opt.N_timesteps//self.opt.N_delays)
+            loc_grid = torch.ones(nb_trials,self.opt.N_timesteps//kernels.shape[-1])
             nb_added = 0
             nb_motifs_distrib = nb_motifs/nb_motifs.sum()
             while nb_added<nb_motifs.sum() and loc_grid.sum()>0:
@@ -89,29 +93,29 @@ class sm_generative_model:
                 # possible locations to avoid overlapping
                 poss_loc_trial, poss_loc_time = torch.where(loc_grid==1)
                 ind_loc = torch.randint(len(poss_loc_trial), [1])
-                trial, time = poss_loc_trial[ind_loc], self.opt.N_delays*poss_loc_time[ind_loc]+self.opt.N_delays//2
+                trial, time = poss_loc_trial[ind_loc], kernels.shape[-1]*poss_loc_time[ind_loc]+kernels.shape[-1]//2
                 if self.opt.dropout_proba:
                     not_to_keep = torch.where(torch.bernoulli(torch.ones_like(self.ind_inv)*self.opt.dropout_proba)==1)[0]
                     not_kept_ind = self.ind_inv[not_to_keep]
                     motif = kernels[k].squeeze(0)
-                    motif[not_kept_ind] = 1/self.opt.N_delays
+                    motif[not_kept_ind] = 1/kernels.shape[-1]
                 else:
                     motif = kernels[k]
-                input_proba[trial,:,time-(self.opt.N_delays//2):time+self.opt.N_delays//2+1] = motif
+                input_proba[trial,:,time-(kernels.shape[-1]//2):time+kernels.shape[-1]//2+1] = motif
                 output_rp[trial,k,time] = 1
                 nb_added += 1
                 loc_grid[trial,poss_loc_time[ind_loc]] = 0
 
         # random distribution when no modification was added
-        cv_proba = (1-self.opt.coefficient_variation.clone().unsqueeze(0).unsqueeze(-1).repeat(nb_trials,1,self.opt.N_timesteps))/self.opt.N_delays
-        input_proba = torch.where((input_proba==-1),input_proba,cv_proba)
-        print(input_proba.min(), input_proba.max())
+        cv_proba = self.avg_fr_nonmot.clone().unsqueeze(0).unsqueeze(-1).repeat(nb_trials,1,self.opt.N_timesteps)/kernels.shape[-1]
+        input_proba = torch.where((input_proba==-1),cv_proba,input_proba*self.avg_fr_mot.clone().unsqueeze(0).unsqueeze(-1).repeat(nb_trials,1,self.opt.N_timesteps))
         # normalizing to required firing rates
         input_proba = input_proba.div_(torch.norm(input_proba, p=1, dim=-1, keepdim=True))*(self.opt.frs.unsqueeze(0).unsqueeze(-1).repeat(nb_trials,1,self.opt.N_timesteps)*1e-3*self.opt.N_timesteps)
-        # harsh threshold to have a single spike in one timebin
-        input_proba[input_proba>1] = 1
+        # get the number of trials that have to be done to reach the correct FR
+        nb_repetitions = max(int(input_proba.max()),1)
         # Bernoulli trial on the probability distribution
-        input_rp = torch.bernoulli(input_proba)
+        input_proba = input_proba.unsqueeze(-1).repeat(1,1,1,nb_repetitions)/max(1,torch.max(input_proba))
+        input_rp = torch.bernoulli(input_proba).sum(axis=-1)
                     
         return input_rp, output_rp
 
